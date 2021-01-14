@@ -14,19 +14,19 @@ import framebuf
 #http://www.sxlist.com/techref/io/video/ntsc.htm
 
 class tv:
-    def __init__(self,hres=64,progressive=False):
-        self.carrier = Pin('X1') 
-        self.tim = Timer(2, prescaler=1,period=1)
-        self.ch = self.tim.channel(1, Timer.PWM, pin=self.carrier)
-        self.ch.pulse_width(1)
-
-        br = hres/64
-        if progressive:
-            self.buf = bytearray(262*hres)
+    def __init__(self,hres=64,progressive=False,lines=None,linetime=64,buf=None):
+        if lines == None:
+            lines = 262 if progressive else 525
+        self.lines = lines
+        if buf == None:
+            if progressive:
+                self.buf = bytearray(262*hres)
+            else:
+                self.buf = bytearray(525*hres)
         else:
-            self.buf = bytearray(525*hres)
-        self.dac = DAC(Pin('X5'))
-        self.dac.write_timed(self.buf,hres*1000000//64,mode=DAC.CIRCULAR)
+            self.buf = buf
+        self.hres = hres
+        self.line_time = linetime
         self.progressive = progressive
         
         self.sync_level = 0
@@ -34,32 +34,63 @@ class tv:
         self.black_level = 58
         self.white_level = 73
 
+        self.phase = 0
+        self.buffer_dac = True
+        self.reinit()
+    def redac(self):
+        self.dac = DAC(Pin('X5'),buffering=self.buffer_dac)
+        self.bmv = memoryview(self.buf)[:len(self)]
+        self.dac_tim = Timer(6, freq=int(self.hres*1000000/self.line_time))
+        self.dac.write_timed(self.bmv,self.dac_tim,mode=DAC.CIRCULAR)
+        self.frame_tim = Timer(5, prescaler=self.dac_tim.prescaler(),period=self.dac_tim.period()*len(self))
+        self.frame_tim.counter(self.phase)
+    def reinit(self):
+        self.calc_porch_magic_numbers()
+        self.init()
+    def set_progressive(self,prog=True):
+        self.progressive = prog
+        self.calc_porch_magic_numbers()
+        self.init()
+    
+    def __len__(self):
+        return self.hres*self.lines
+    def calc_porch_magic_numbers(self):
+        br = self.hres/self.line_time
+
         w = round(4.7*br)
-        t = int(10.9*br+0.9)
+        t = int(10.9*br+0.9)#round mostly up
         s = round(1.5*br)
         self.h_blank = [s,s+w,t]
         self.v_blank_e = [6,12,18]
         self.v_blank_o = [6,12,19]
 
-
         hsl = round(18*br)
         hsh = round(58*br)
         
         self.h_safe = [hsl-t,hsh-t]
-        self.v_safe = [32*(2-progressive),208*(2-progressive)]
+        self.v_safe = [32*(2-self.progressive),208*(2-self.progressive)]
         
-        self.hres = hres
-        self.be = memoryview(self.buf)
-        if not progressive:
-            self.bo = self.be[len(self.buf)//2:]
-        self.fb = framebuf.FrameBuffer(self.buf,hres,525,framebuf.GS8)
-        self.fbe_mv = self.be[hres*21+t:]
-        if not progressive:
-            self.fbo_mv = self.bo[hres*21+(hres//2)+t:]
-        self.fbe = framebuf.FrameBuffer(self.fbe_mv,hres-t,241,framebuf.GS8,hres)
-        if not progressive:
-            self.fbo = framebuf.FrameBuffer(self.fbo_mv,hres-t,241,framebuf.GS8,hres)
+    def init(self):
+        self.carrier = Pin('X1') 
+        self.tim = Timer(2, prescaler=1,period=1)
+        self.ch = self.tim.channel(1, Timer.PWM, pin=self.carrier)
+        self.ch.pulse_width(1)
+
+        self.redac()
+        
+        self.be = self.bmv
+        if not self.progressive:
+            self.bo = self.be[len(self)//2:]
+        self.fb = framebuf.FrameBuffer(self.buf,self.hres,self.lines,framebuf.GS8)
+        self.fbe_mv = self.be[self.hres*21+self.h_blank[2]:]
+        if not self.progressive:
+            self.fbo_mv = self.bo[self.hres*43//2+self.h_blank[2]:]
+        h = self.y_dim()//(2-self.progressive)
+        self.fbe = framebuf.FrameBuffer(self.fbe_mv,self.hres-self.h_blank[2],h,framebuf.GS8,self.hres)
+        if not self.progressive:
+            self.fbo = framebuf.FrameBuffer(self.fbo_mv,self.hres-self.h_blank[2],h,framebuf.GS8,self.hres)
         self.clear()
+
     def set_pixel(self,x,y,v):
         if self.progressive:
             self.fbe.pixel(x,y,int(v*(self.white_level-self.black_level)+self.black_level))
@@ -74,16 +105,11 @@ class tv:
         self.tim.init(prescaler=pre,period=per)
         self.ch.pulse_width(w)
     def clear(self):
-        for i in range(len(self.buf)):
-            self.buf[i] = self.black_level
+        self.fb.fill(self.black_level)
         self.syncs()
     def syncs(self):
-        for y in range(262 if self.progressive else 525):
-            for x in range(self.hres):
-                if x < self.h_blank[2]:
-                    self.buf[x+y*self.hres] = self.blanking_level
-                if self.h_blank[0] <= x < self.h_blank[1]:
-                    self.buf[x+y*self.hres] = self.sync_level
+        self.fb.fill_rect(0,0,self.h_blank[2],self.lines,self.blanking_level)
+        self.fb.fill_rect(self.h_blank[0],0,self.h_blank[1]-self.h_blank[0],self.lines,self.sync_level)
         for y in range(self.v_blank_e[2]):
             inv = self.v_blank_e[0] <= y < self.v_blank_e[1]
             for x in range(self.hres//2):
@@ -102,10 +128,7 @@ class tv:
     def x_dim(self):
         return self.hres-self.h_blank[2]
     def y_dim(self):
-        return 241 if self.progressive else 482
-
-    
-
+        return self.lines-(21 if self.progressive else 43)
     
     def mandelbrot(self,imax=8,p=0,s=2,julia=False,il=0,x0=None,y0=None,x1=None,y1=None,asm=True,julia_seed=0):
         

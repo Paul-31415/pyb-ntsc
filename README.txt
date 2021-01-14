@@ -35,7 +35,9 @@ The pyboard's DAC is rated for 1 MHz operation, which corresponds to the default
  argument of hres=64 for the constructor.
 NOTE: hres should be even if progressive == False (else you'll get a jittery picture)
 
-On my pyboard, it worked up to hres=124 but not above.
+On my pyboard, it worked up to hres=124 interlaced but not above.
+ after a code refactor, it works up to hres=250 progressive scan, with higher resolutions
+ inaccessible due to both lack of available memory and dac slew rate.
 
 progressive=False results in ~ 30 fps interlaced with 482 lines vertical resolution.
 progressive=True  results in ~ 60 fps with 241 lines vertical resolution.
