@@ -13,19 +13,19 @@ Diagram:
 
    (X1)──┐
         ┌┴┐
-	    │1│ r = 1 k ohm
-		│k│
-		└┬┘
-		 └──┐
+        │1│ r = 1 k ohm
+        │k│
+        └┬┘
+         └──┐
             ├─────────── to wire antenna
      gate┃┠─┘drain
    (X5)──┨┃
          ┃┠─┐source
-		    └─────┐
-			     ─┴─
-				 ╶─╴
-				  ─
-				 gnd
+            └─────┐
+                 ─┴─
+                 ╶─╴
+                  ─
+                 gnd
 
 The magic numbers for blanking_level, black_level, and white_level were found
  experimentally. More greyscale range can be gotten by modifying the schematic
