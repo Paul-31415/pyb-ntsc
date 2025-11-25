@@ -1,6 +1,6 @@
 Update:
 diode modulator for much better shade resolution and tx linearity.
-a lot of stuff. some incomplete shader compilation (automatic floating point assembler). fast exp and log approximation for gamma (unused).
+a lot of stuff. some incomplete shader stuff (uses an automatic floating point math assembler from a different project). fast exp and log approximation for gamma (unused).
 now main.py launches a dupterm on the tv with text input sniffed from the debug uart of an adafru.it/3601 bluetooth keyboard on Y2
 font was made by hand to look good on a portavision
 
