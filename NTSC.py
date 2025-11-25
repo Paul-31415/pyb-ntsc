@@ -1,5 +1,8 @@
+import gc
 from pyb import Pin, Timer, DAC
+gc.collect()
 import framebuf
+gc.collect()
 #big bulky video buffer (8 bits deep)
 #fps = 30/1.001
 #33367 bytes needed for buffer at 1MHz
@@ -13,16 +16,24 @@ import framebuf
 
 #http://www.sxlist.com/techref/io/video/ntsc.htm
 
+# vsync: 3 lines porch, 3 lines sync, 3 lines porch, 11 lines black, 242.5 lines video
+# hsync: 1.5µs porch, 4.7µs sync, 4.7µs porch (colorburst 40 IRE ptp ≥ 2.5µs), 52.6µs video
+# dma is good to about period 9 or so = 8.4MHz, but memory is insufficient
+# diode modulator is inverted and linear on about 70% of the domain (from approx 26 to 205, 179ish codepoints)
+# progressive scan 262 lines memory cost: 16637 bytes/MHz
+#                                         6MHz uses 99822 bytes
+# 3:4 aspect ratio
+
+
+
+
 class tv:
-    def __init__(self,hres=64,progressive=False,lines=None,linetime=64,buf=None):
-        if lines == None:
+    def __init__(self,hres=64,progressive=False,lines=None,linetime=64,buf=None,audio_subcarrier=True,broadcast=True):
+        if lines is None:
             lines = 262 if progressive else 525
         self.lines = lines
-        if buf == None:
-            if progressive:
-                self.buf = bytearray(262*hres)
-            else:
-                self.buf = bytearray(525*hres)
+        if buf is None:
+            self.buf = bytearray(lines*hres)
         else:
             self.buf = buf
         self.hres = hres
@@ -30,15 +41,18 @@ class tv:
         self.progressive = progressive
         
         self.sync_level = 0
-        self.blanking_level = 56
-        self.black_level = 58
-        self.white_level = 73
-
+        self.blanking_level = 56 if broadcast else 22
+        self.black_level = 58 if broadcast else 26
+        self.white_level = 73 if broadcast else 78
+        
+        self.audio_sc = audio_subcarrier
+        
         self.phase = 0
         self.buffer_dac = True
         self.reinit()
     def redac(self):
         self.dac = DAC(Pin('X5'),buffering=self.buffer_dac)
+        self.dac = DAC(Pin('X6'),buffering=self.buffer_dac)
         self.bmv = memoryview(self.buf)[:len(self)]
         self.dac_tim = Timer(6, freq=int(self.hres*1000000/self.line_time))
         self.dac.write_timed(self.bmv,self.dac_tim,mode=DAC.CIRCULAR)
@@ -75,6 +89,11 @@ class tv:
         self.tim = Timer(2, prescaler=1,period=1)
         self.ch = self.tim.channel(1, Timer.PWM, pin=self.carrier)
         self.ch.pulse_width(1)
+        if self.audio_sc:
+            self.a_carrier = Pin('X2') 
+            self.a_tim = Timer(4, freq=4500000)
+            self.a_ch = self.a_tim.channel(1, Timer.PWM, pin=self.a_carrier)
+            self.a_ch.pulse_width_percent(50)
 
         self.redac()
         
@@ -101,6 +120,7 @@ class tv:
             return (self.fbe_mv[x+y*self.hres]-self.black_level)/(self.white_level-self.black_level)
         else:
             return ([self.fbe_mv,self.fbo_mv][y&1][x+(y//2)*self.hres]-self.black_level)/(self.white_level-self.black_level)
+
     def set_carrier(self,pre=1,per=1,w=1):
         self.tim.init(prescaler=pre,period=per)
         self.ch.pulse_width(w)
@@ -125,6 +145,12 @@ class tv:
                     if (self.h_blank[0] <= x < self.h_blank[1]) ^ inv:
                         val = self.sync_level
                     self.bo[y*self.hres//2+x] = val
+    def lines_iter(self):
+        for y in range(self.v_blank_e[2],self.lines-21):
+            yield self.fbe_mv[y*self.hres:(y+1)*self.hres-self.h_blank[2]]
+            if not self.progressive:
+                yield self.fbo_mv[y*self.hres:(y+1)*self.hres-self.h_blank[2]]
+                       
     def x_dim(self):
         return self.hres-self.h_blank[2]
     def y_dim(self):
@@ -242,6 +268,7 @@ class tv:
                 self.mandelbrot(it,pos,zoom,julia,0,x0,y0,x1,y1,julia_seed=jp)
 
     
+                
                 
 @micropython.asm_thumb
 def a_mandelbrot(r0,r1,r2):
